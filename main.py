@@ -1,16 +1,61 @@
 import re
 import requests
 import logging
+import json
+import time
 from collections import OrderedDict
 from datetime import datetime
 import config
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("function.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
-def is_url_valid(url):
-    """检查URL是否有效"""
+# 加载配置文件
+def load_config():
+    """加载配置文件"""
     try:
-        response = requests.head(url, timeout=10)  # 使用HEAD请求来快速验证链接是否有效
+        with open(r"myconfig.json", encoding='utf-8') as json_file:
+            parms = json.load(json_file)
+            if 'ctype' not in parms:
+                parms['ctype'] = 0x01
+            if 'checkfile_list' not in parms:
+                parms['checkfile_list'] = []
+            if 'keywords' not in parms:
+                parms['keywords'] = []
+            if 'otype' not in parms:
+                parms['otype'] = 0x01 | 0x02 | 0x10
+            if 'sendfile_list' not in parms:
+                parms['sendfile_list'] = []
+            if 'newDb' not in parms:
+                parms['newDb'] = False
+            if 'webhook' not in parms:
+                parms['webhook'] = ''
+            if 'secret' not in parms:
+                parms['secret'] = ''
+            if 'max_check_count' not in parms:
+                parms['max_check_count'] = 2000
+    except Exception as e:
+        logging.error(f"未发现myconfig.json配置文件，或配置文件格式有误。错误：{e}")
+        return {}
+    return parms
+
+# 设置请求的重试机制
+def is_url_valid(url, retries=3, backoff_factor=1):
+    """检查URL是否有效，增加重试机制"""
+    session = requests.Session()
+    retry = Retry(
+        total=retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=[500, 502, 503, 504],
+        method_whitelist=["HEAD", "GET", "POST"]
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    try:
+        response = session.head(url, timeout=10)
         if response.status_code == 200:
             return True
         else:
@@ -20,6 +65,7 @@ def is_url_valid(url):
         logging.warning(f"请求失败: {url} - 错误: {e}")
         return False
 
+# 解析模板文件
 def parse_template(template_file):
     template_channels = OrderedDict()
     current_category = None
@@ -37,6 +83,7 @@ def parse_template(template_file):
 
     return template_channels
 
+# 获取频道列表
 def fetch_channels(url):
     channels = OrderedDict()
 
@@ -88,6 +135,7 @@ def fetch_channels(url):
 
     return channels
 
+# 匹配模板中的频道
 def match_channels(template_channels, all_channels):
     matched_channels = OrderedDict()
 
@@ -101,6 +149,7 @@ def match_channels(template_channels, all_channels):
 
     return matched_channels
 
+# 过滤源URL并获取匹配的频道
 def filter_source_urls(template_file):
     template_channels = parse_template(template_file)
     source_urls = config.source_urls
@@ -118,9 +167,11 @@ def filter_source_urls(template_file):
 
     return matched_channels, template_channels
 
+# 检查是否为IPv6
 def is_ipv6(url):
     return re.match(r'^http:\/\/\[[0-9a-fA-F:]+\]', url) is not None
 
+# 读取已存在的URL
 def read_existing_urls(file_path):
     """读取文件中的所有URL"""
     urls = set()
@@ -134,6 +185,7 @@ def read_existing_urls(file_path):
         logging.warning(f"文件未找到: {file_path}")
     return urls
 
+# 移除文件中无效的URLs
 def remove_invalid_urls(file_path, valid_urls):
     """移除文件中无效的URLs"""
     try:
@@ -151,6 +203,7 @@ def remove_invalid_urls(file_path, valid_urls):
     except Exception as e:
         logging.error(f"移除无效URL失败: {e}")
 
+# 更新频道列表
 def updateChannelUrlsM3U(channels, template_channels):
     written_urls = set()
 
