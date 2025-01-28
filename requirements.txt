@@ -2,4 +2,3 @@ opencv-python
 requests
 pandas
 openpyxl
-cv2
