@@ -7,6 +7,19 @@ import config
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("function.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
+def is_url_valid(url):
+    """检查URL是否有效"""
+    try:
+        response = requests.head(url, timeout=10)  # 使用HEAD请求来快速验证链接是否有效
+        if response.status_code == 200:
+            return True
+        else:
+            logging.warning(f"无效链接: {url} (状态码: {response.status_code})")
+            return False
+    except requests.RequestException as e:
+        logging.warning(f"请求失败: {url} - 错误: {e}")
+        return False
+
 def parse_template(template_file):
     template_channels = OrderedDict()
     current_category = None
@@ -49,7 +62,7 @@ def fetch_channels(url):
                             channels[current_category] = []
                 elif line and not line.startswith("#"):
                     channel_url = line.strip()
-                    if current_category and channel_name:
+                    if current_category and channel_name and is_url_valid(channel_url):  # 检查URL是否有效
                         channels[current_category].append((channel_name, channel_url))
         else:
             for line in lines:
@@ -62,9 +75,11 @@ def fetch_channels(url):
                     if match:
                         channel_name = match.group(1).strip()
                         channel_url = match.group(2).strip()
-                        channels[current_category].append((channel_name, channel_url))
+                        if is_url_valid(channel_url):  # 检查URL是否有效
+                            channels[current_category].append((channel_name, channel_url))
                     elif line:
-                        channels[current_category].append((line, ''))
+                        if is_url_valid(line):  # 检查URL是否有效
+                            channels[current_category].append((line, ''))
         if channels:
             categories = ", ".join(channels.keys())
             logging.info(f"url: {url} 爬取成功✅，包含频道分类: {categories}")
@@ -106,8 +121,48 @@ def filter_source_urls(template_file):
 def is_ipv6(url):
     return re.match(r'^http:\/\/\[[0-9a-fA-F:]+\]', url) is not None
 
+def read_existing_urls(file_path):
+    """读取文件中的所有URL"""
+    urls = set()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):  # 跳过注释
+                    urls.add(line)
+    except FileNotFoundError:
+        logging.warning(f"文件未找到: {file_path}")
+    return urls
+
+def remove_invalid_urls(file_path, valid_urls):
+    """移除文件中无效的URLs"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    if line in valid_urls:
+                        f.write(line + "\n")  # 仅写入有效的URL
+                else:
+                    f.write(line + "\n")  # 保留注释行
+    except Exception as e:
+        logging.error(f"移除无效URL失败: {e}")
+
 def updateChannelUrlsM3U(channels, template_channels):
     written_urls = set()
+
+    # 读取现有的文件中的URL并验证它们是否有效
+    existing_urls_m3u = read_existing_urls("live.m3u")
+    existing_urls_txt = read_existing_urls("live.txt")
+    valid_urls_m3u = set(url for url in existing_urls_m3u if is_url_valid(url))
+    valid_urls_txt = set(url for url in existing_urls_txt if is_url_valid(url))
+
+    # 移除文件中无效的URL
+    remove_invalid_urls("live.m3u", valid_urls_m3u)
+    remove_invalid_urls("live.txt", valid_urls_txt)
 
     current_date = datetime.now().strftime("%Y-%m-%d")
     for group in config.announcements:
@@ -135,8 +190,10 @@ def updateChannelUrlsM3U(channels, template_channels):
                             filtered_urls = []
                             for url in sorted_urls:
                                 if url and url not in written_urls and not any(blacklist in url for blacklist in config.url_blacklist):
-                                    filtered_urls.append(url)
-                                    written_urls.add(url)
+                                    # 检查URL是否有效
+                                    if is_url_valid(url):
+                                        filtered_urls.append(url)
+                                        written_urls.add(url)
 
                             total_urls = len(filtered_urls)
                             for index, url in enumerate(filtered_urls, start=1):
