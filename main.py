@@ -1,13 +1,10 @@
-import re
-import requests
 import logging
 import json
 import time
 from collections import OrderedDict
 from datetime import datetime
 import config
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from iptv import Iptv
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.FileHandler("function.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
@@ -40,28 +37,18 @@ def load_config():
         return {}
     return parms
 
-# 设置请求的重试机制
-def is_url_valid(url, retries=3, backoff_factor=1):
-    """检查URL是否有效，增加重试机制"""
-    session = requests.Session()
-    retry = Retry(
-        total=retries,
-        backoff_factor=backoff_factor,
-        status_forcelist=[500, 502, 503, 504],
-        method_whitelist=["HEAD", "GET", "POST"]
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-
+# 检查URL是否有效，使用Iptv类中的方法
+def is_url_valid(url, iptv):
+    """检查URL是否有效，利用iptv类中的方法进行验证"""
     try:
-        response = session.head(url, timeout=10)
-        if response.status_code == 200:
+        # 使用iptv检查 URL 是否有效
+        check_result = iptv.check_url(url)
+        if check_result:
             return True
         else:
-            logging.warning(f"无效链接: {url} (状态码: {response.status_code})")
+            logging.warning(f"无效链接: {url}")
             return False
-    except requests.RequestException as e:
+    except Exception as e:
         logging.warning(f"请求失败: {url} - 错误: {e}")
         return False
 
@@ -109,8 +96,7 @@ def fetch_channels(url):
                             channels[current_category] = []
                 elif line and not line.startswith("#"):
                     channel_url = line.strip()
-                    if current_category and channel_name and is_url_valid(channel_url):  # 检查URL是否有效
-                        channels[current_category].append((channel_name, channel_url))
+                    channels[current_category].append((channel_name, channel_url))
         else:
             for line in lines:
                 line = line.strip()
@@ -122,11 +108,9 @@ def fetch_channels(url):
                     if match:
                         channel_name = match.group(1).strip()
                         channel_url = match.group(2).strip()
-                        if is_url_valid(channel_url):  # 检查URL是否有效
-                            channels[current_category].append((channel_name, channel_url))
+                        channels[current_category].append((channel_name, channel_url))
                     elif line:
-                        if is_url_valid(line):  # 检查URL是否有效
-                            channels[current_category].append((line, ''))
+                        channels[current_category].append((line, ''))
         if channels:
             categories = ", ".join(channels.keys())
             logging.info(f"url: {url} 爬取成功✅，包含频道分类: {categories}")
@@ -210,8 +194,8 @@ def updateChannelUrlsM3U(channels, template_channels):
     # 读取现有的文件中的URL并验证它们是否有效
     existing_urls_m3u = read_existing_urls("live.m3u")
     existing_urls_txt = read_existing_urls("live.txt")
-    valid_urls_m3u = set(url for url in existing_urls_m3u if is_url_valid(url))
-    valid_urls_txt = set(url for url in existing_urls_txt if is_url_valid(url))
+    valid_urls_m3u = set(url for url in existing_urls_m3u if is_url_valid(url, iptv))
+    valid_urls_txt = set(url for url in existing_urls_txt if is_url_valid(url, iptv))
 
     # 移除文件中无效的URL
     remove_invalid_urls("live.m3u", valid_urls_m3u)
@@ -244,7 +228,7 @@ def updateChannelUrlsM3U(channels, template_channels):
                             for url in sorted_urls:
                                 if url and url not in written_urls and not any(blacklist in url for blacklist in config.url_blacklist):
                                     # 检查URL是否有效
-                                    if is_url_valid(url):
+                                    if is_url_valid(url, iptv):
                                         filtered_urls.append(url)
                                         written_urls.add(url)
 
@@ -268,6 +252,8 @@ def updateChannelUrlsM3U(channels, template_channels):
             f_txt.write("\n")
 
 if __name__ == "__main__":
+    parms = load_config()
+    iptv = Iptv()  # 初始化 Iptv 类实例
     template_file = "demo.txt"
     channels, template_channels = filter_source_urls(template_file)
     updateChannelUrlsM3U(channels, template_channels)
